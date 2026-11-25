@@ -98,7 +98,10 @@ final class RevealController {
             // The watchdog saw the toggle vanish after collapsing: stay open (no collapse/expand
             // cycle) until a refresh or a rearrangement clears it.
             if toggleUndrawn && Date() >= blockedUntil { toggleUndrawn = false }   // cooldown over: try again
-            let problem = toggleUndrawn ? .hiddenRightOfToggle : LayoutValidator.check(frames, keys: bar.ownKeys())
+            // macOS 27: the stored keys aren't known to follow a ⌘-drag there, so go by where the
+            // items are.
+            let problem = toggleUndrawn ? .hiddenRightOfToggle
+                : (StatusBarController.singleWindowBar ? LayoutValidator.check(frames) : LayoutValidator.check(frames, keys: bar.ownKeys()))
             layoutProblem = problem
             model.layoutBlocked = problem != nil
             // Frames can be mid-layout right after items are created or displays change; look

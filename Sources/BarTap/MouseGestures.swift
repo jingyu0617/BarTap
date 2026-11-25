@@ -24,6 +24,8 @@ final class MouseGestures {
     var onOutsideClick: ((CGPoint) -> Void)?
     /// Supplies x-ranges in a bar that are *not* empty (app menus) for the given screen.
     var occupiedProvider: ((ScreenInfo) -> [ClosedRange<CGFloat>]?)?
+    /// Where status icons start on a display when the window list can't tell (macOS 27).
+    var statusMinXProvider: ((ScreenInfo) -> CGFloat?)?
 
     private var config = Config()
     private var monitors: [Any] = []
@@ -105,7 +107,11 @@ final class MouseGestures {
     /// Empty bar space: not over a status icon, not over the notch, and not over app menus.
     func isEmptyBarSpace(_ p: CGPoint, on screen: ScreenInfo) -> Bool {
         if let n = screen.notch, n.contains(p.x) { return false }
-        if let r = statusRange(for: screen), p.x >= r.lowerBound - 2 { return false }
+        if let r = statusRange(for: screen) {
+            if p.x >= r.lowerBound - 2 { return false }
+        } else if let x = statusMinXProvider?(screen), p.x >= x - 2 {
+            return false
+        }
         if let occupied = occupiedProvider?(screen) {
             return !occupied.contains { $0.contains(p.x) }
         }

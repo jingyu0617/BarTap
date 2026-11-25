@@ -74,6 +74,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, SettingsHost {
         bar.onCleanExitClick = { [weak self] in self?.reveal.setCleanMode(false) }
         bar.menuProvider = { [weak self] in self?.buildMenu() ?? NSMenu() }
         reveal.onChange = { [weak self] in self?.stateChanged() }
+        bar.menuMaxXProvider = { [weak self] screen in
+            // Accessibility reports the front app's menus on the active display, in global x.
+            guard let self, let cache = self.appMenuRanges,
+                  cache.pid == NSWorkspace.shared.frontmostApplication?.processIdentifier else { return nil }
+            let f = screen.frame
+            return cache.rects.filter { $0.midX >= f.minX && $0.midX <= f.maxX }.map(\.maxX).max()
+        }
+        gestures.statusMinXProvider = { [weak self] screen in self?.bar.statusAreaMinX(onScreenWithFrame: screen.frame) }
         catalog.ownRun = { [weak self] in
             guard let self, let t = self.bar.toggleItem?.button?.window?.frame.width, t > 0,
                   let h = self.bar.hiddenItem?.button?.window?.frame.width, h > 0 else { return nil }
@@ -435,14 +443,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, SettingsHost {
         c.arrangeOnCommandDrag = settings.revealWhileDragging
         c.dismissShelfOnOutsideClick = shelfPanel?.isVisible ?? false
         gestures.configure(c)
-        if c.hover || c.emptyClick { refreshAppMenuRanges() }
+        if c.hover || c.emptyClick || StatusBarController.singleWindowBar { refreshAppMenuRanges() }
     }
 
     /// Frontmost app's menu titles (Accessibility), so "empty bar space" excludes them precisely.
     private func refreshAppMenuRanges() {
         guard AXCatalog.isTrusted, let app = NSWorkspace.shared.frontmostApplication else { appMenuRanges = nil; return }
         let pid = app.processIdentifier
-        catalog.appMenuRanges(pid: pid) { [weak self] rects in self?.appMenuRanges = (pid, rects) }
+        catalog.appMenuRanges(pid: pid) { [weak self] rects in
+            guard let self else { return }
+            // An empty answer (the app was busy) doesn't replace what is known about the same app.
+            if !rects.isEmpty || self.appMenuRanges?.pid != pid { self.appMenuRanges = (pid, rects) }
+            // macOS 27: the room left of the divider depends on the front app's menus.
+            self.bar?.refit()
+        }
     }
 
     private func observeSystem() {
@@ -464,7 +478,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, SettingsHost {
             }))
         }
         observers.append((ws, ws.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { [weak self] _ in
-            guard let self, self.settings.hoverReveal || self.settings.emptyClickReveal else { return }
+            guard let self, self.settings.hoverReveal || self.settings.emptyClickReveal || StatusBarController.singleWindowBar else { return }
             self.refreshAppMenuRanges()
         }))
     }
@@ -1053,6 +1067,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, SettingsHost {
             "keepAwake": keepAwake.isActive,
             "lidAwake": lidAwake.isOn,
             "osaxTest": osaxTest,
+            "singleWindowBar": bar.singleWindowInfo,
             "hotkeyFailures": hotkeyFailures.map(\.rawValue),
             "busy": reveal.currentBusyReason()?.rawValue ?? "",
             "lastBusy": reveal.lastBusyReason?.rawValue ?? "",

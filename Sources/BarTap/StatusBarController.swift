@@ -40,6 +40,29 @@ final class StatusBarController: NSObject {
     private(set) var appliedLevel: RevealLevel?
     private var showDividers = true
 
+    // MARK: macOS 27 (one window for the whole menu bar; see SingleWindowBar)
+
+    /// macOS 27 and later. `defaults write io.github.chenfangfc.BarTap singleWindowBar -bool …` overrides it.
+    static let singleWindowBar: Bool = {
+        if let forced = UserDefaults.standard.object(forKey: "singleWindowBar") as? Bool { return forced }
+        return ProcessInfo.processInfo.operatingSystemVersion.majorVersion >= 27
+    }()
+    /// Right edge (global x) of the front app's menus on a display, if known.
+    var menuMaxXProvider: ((NSScreen) -> CGFloat?)?
+    /// The BarTap button's window width while it only shows its icon.
+    private var toggleNaturalWidth: CGFloat = 36
+    /// macOS's padding around an item (window width − length).
+    private var itemPadding: CGFloat = 10
+    private var lastBetween: CGFloat = 0
+    private var lastMenuEdge: CGFloat?
+    /// Blank width currently added on the left of the BarTap button.
+    private(set) var toggleExtra: CGFloat = 0
+    private var baseToggleImage: NSImage?
+    private var wideToggleImage: (base: NSImage, extra: CGFloat, image: NSImage)?
+    private var refitWork: DispatchWorkItem?
+    /// The last sizing, for the debug dump.
+    private(set) var lastFit = ""
+
     init(settings: Settings) {
         self.settings = settings
     }
@@ -118,6 +141,10 @@ final class StatusBarController: NSObject {
         cleanSeparator = nil
         cleanExit = nil
         appliedLevel = nil
+        toggleExtra = 0
+        wideToggleImage = nil
+        refitWork?.cancel()
+        refitWork = nil
     }
 
     private func configureButton(_ item: NSStatusItem, identifier: String, label: String) {
@@ -144,6 +171,13 @@ final class StatusBarController: NSObject {
         self.showDividers = showDividers
         guard let hidden = hiddenItem else { return }
         let open = showDividers ? Self.dividerLength : Self.gapLength
+        if Self.singleWindowBar {
+            applySingleWindow(level: level, open: open, followUp: true)
+            hidden.button?.image = (showDividers && level >= .revealed) ? Icons.divider(double: false) : nil
+            alwaysItem?.button?.image = (showDividers && level >= .revealedAll) ? Icons.divider(double: true) : nil
+            appliedLevel = level
+            return
+        }
         // Measure before changing anything: once collapsed, the divider's own right edge stays put,
         // so a measurement taken in any state is valid.
         let closed = collapsedLength()
@@ -170,6 +204,160 @@ final class StatusBarController: NSObject {
         if abs(item.length - length) > 0.5 { item.length = length }
     }
 
+    // MARK: macOS 27 sizing
+
+    /// Sizes the dividers (and, on a wide display, the BarTap button) so that the icons left of a
+    /// closed divider have no room left: each width stays under macOS 27's half-display limit.
+    private func applySingleWindow(level: RevealLevel, open: CGFloat, followUp: Bool) {
+        guard let hidden = hiddenItem else { return }
+        rememberNaturalSizes()
+        switch level {
+        case .collapsed:
+            let fit = hiddenFit(open: open)
+            let current = hidden.length + toggleExtra
+            // Already closed: don't lay the bar out again for a few points.
+            let closed = hidden.length > open + 1 || toggleExtra > 0
+            if !closed || SingleWindowBar.shouldResize(from: current, to: fit.total) {
+                // Widen the divider before the button, so nothing hidden shows in between.
+                setLength(hidden, fit.dividerLength)
+                setToggleExtra(fit.toggleExtra)
+            }
+            if let a = alwaysItem { setLength(a, open) }
+        case .revealed:
+            setToggleExtra(0)
+            if let a = alwaysItem { setLength(a, alwaysLength(open: open)) }
+            setLength(hidden, open)
+        case .revealedAll:
+            setToggleExtra(0)
+            if let a = alwaysItem { setLength(a, open) }
+            setLength(hidden, open)
+        }
+        // The frames read above can be a layout behind (macOS lays the bar out after this
+        // returns): measure once more when it has settled.
+        refitWork?.cancel()
+        refitWork = nil
+        if followUp, level < .revealedAll {
+            let work = DispatchWorkItem { [weak self] in self?.refit() }
+            refitWork = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8, execute: work)
+        }
+    }
+
+    /// Measures again and resizes if the room changed (another app's menus, a display change).
+    func refit() {
+        guard Self.singleWindowBar, let level = appliedLevel, level < .revealedAll, !isCleanModeOn else { return }
+        applySingleWindow(level: level, open: showDividers ? Self.dividerLength : Self.gapLength, followUp: false)
+    }
+
+    private func rememberNaturalSizes() {
+        if toggleExtra == 0, let w = toggleItem?.button?.window?.frame.width, w > 8, w < 160 { toggleNaturalWidth = w }
+        if let h = hiddenItem, h.length > 0, h.length <= 20, let w = h.button?.window?.frame.width, w >= h.length, w - h.length <= 40 {
+            itemPadding = w - h.length
+        }
+    }
+
+    private func narrowestScreenWidth() -> CGFloat {
+        NSScreen.screens.map(\.frame.width).min() ?? 1440
+    }
+
+    private func menuEdge(on screen: NSScreen) -> CGFloat? {
+        let d = UserDefaults.standard
+        // Hidden setting: the menus' right edge, in points from the display's left edge.
+        if let forced = d.object(forKey: "mb27.menuEdge") as? Double { return screen.frame.minX + CGFloat(forced) }
+        if let x = menuMaxXProvider?(screen) { lastMenuEdge = x; return x }
+        // No answer this time (Accessibility timed out): the last one beats a guess.
+        if let x = lastMenuEdge, x >= screen.frame.minX, x <= screen.frame.maxX { return x }
+        return nil
+    }
+
+    private func hiddenFit(open: CGFloat) -> SingleWindowBar.Fit {
+        let narrowest = narrowestScreenWidth()
+        let longest = SingleWindowBar.maxLength(narrowestWidth: narrowest, padding: itemPadding)
+        // Can't measure: fill a modest part with the divider alone. Icons may stay visible, but
+        // the BarTap button can't be pushed out.
+        let fallback = SingleWindowBar.Fit(dividerLength: max(open, min(longest, narrowest * 0.25)), toggleExtra: 0, wanted: -1)
+        guard let screen = referenceScreen(), let t = toggleItem?.button?.window?.frame, t.width > 0,
+              let h = hiddenItem?.button?.window?.frame, h.width > 0 else {
+            lastFit = "no frames: divider \(Int(fallback.dividerLength))"
+            return fallback
+        }
+        let between = t.minX - h.maxX
+        if between >= -1, between < 600 { lastBetween = max(0, between) }
+        let forced = (UserDefaults.standard.object(forKey: "mb27.extra") as? Double).map { CGFloat($0) }
+        let measure = SingleWindowBar.Measure(
+            screenMinX: screen.frame.minX, screenWidth: screen.frame.width, narrowestWidth: narrowest,
+            toggleMaxX: t.maxX, toggleNaturalWidth: toggleNaturalWidth, between: lastBetween, padding: itemPadding,
+            openLength: open, menuMaxX: menuEdge(on: screen))
+        guard let fit = SingleWindowBar.fit(measure, forcedWanted: forced) else {
+            lastFit = "implausible frames (toggle maxX \(Int(t.maxX))): divider \(Int(fallback.dividerLength))"
+            return fallback
+        }
+        lastFit = "screen \(Int(screen.frame.minX))+\(Int(screen.frame.width)) toggleMaxX \(Int(t.maxX)) natural \(Int(toggleNaturalWidth))"
+            + " between \(Int(lastBetween)) padding \(Int(itemPadding)) menuEdge \(measure.menuMaxX.map { "\(Int($0))" } ?? "?")"
+            + " wanted \(Int(fit.wanted)) → divider \(Int(fit.dividerLength)) + button \(Int(fit.toggleExtra))"
+        return fit
+    }
+
+    /// The always-hidden divider while the hidden section is shown: it fills the room on its left,
+    /// as far as one item may (the BarTap button can't help here, it sits further right).
+    private func alwaysLength(open: CGFloat) -> CGFloat {
+        let longest = SingleWindowBar.maxLength(narrowestWidth: narrowestScreenWidth(), padding: itemPadding)
+        guard let screen = referenceScreen(), let a = alwaysItem?.button?.window?.frame, a.width > 0,
+              a.maxX > screen.frame.minX, a.maxX <= screen.frame.maxX + 1 else { return max(open, min(longest, narrowestScreenWidth() * 0.25)) }
+        let edge = menuEdge(on: screen) ?? screen.frame.minX + screen.frame.width * SingleWindowBar.unknownMenuShare
+        let wanted = a.maxX - itemPadding - edge - SingleWindowBar.margin
+        return max(open, min(longest, wanted.rounded(.down)))
+    }
+
+    private func setToggleExtra(_ extra: CGFloat) {
+        guard let toggle = toggleItem else { return }
+        let e = max(0, extra.rounded())
+        guard abs(e - toggleExtra) > 0.5 else { return }
+        toggleExtra = e
+        toggle.length = e > 0 ? max(1, toggleNaturalWidth - itemPadding) + e : NSStatusItem.variableLength
+        refreshToggleImage()
+    }
+
+    /// The button's icon; while the button is wide, the icon at its right end and nothing left of it.
+    private func refreshToggleImage() {
+        guard let button = toggleItem?.button, let base = baseToggleImage else { return }
+        var image = base
+        if toggleExtra > 0 {
+            if let w = wideToggleImage, w.base === base, w.extra == toggleExtra {
+                image = w.image
+            } else {
+                let size = NSSize(width: base.size.width + toggleExtra, height: base.size.height)
+                let wide = NSImage(size: size, flipped: false) { rect in
+                    base.draw(in: NSRect(x: rect.maxX - base.size.width, y: rect.minY, width: base.size.width, height: base.size.height))
+                    return true
+                }
+                wide.isTemplate = base.isTemplate
+                wideToggleImage = (base, toggleExtra, wide)
+                image = wide
+            }
+        } else {
+            wideToggleImage = nil
+        }
+        if button.image !== image { button.image = image }
+    }
+
+    /// Left edge (global x) of BarTap's divider on a display: status icons start there (macOS 27
+    /// has no per-icon windows to ask).
+    func statusAreaMinX(onScreenWithFrame frame: CGRect) -> CGFloat? {
+        guard Self.singleWindowBar, let h = hiddenItem?.button?.window?.frame, h.width > 0,
+              h.maxX > frame.minX, h.maxX <= frame.maxX + 1 else { return nil }
+        return max(frame.minX, toggleExtra > 0 || h.width > 60 ? h.maxX : h.minX)
+    }
+
+    var singleWindowInfo: [String: Any] {
+        ["on": Self.singleWindowBar, "fit": lastFit, "toggleExtra": Double(toggleExtra), "toggleNatural": Double(toggleNaturalWidth),
+         "padding": Double(itemPadding), "hiddenLength": Double(hiddenItem?.length ?? -1),
+         "toggleLength": Double(toggleItem?.length ?? -1),
+         "rawToggle": toggleItem?.button?.window.map { NSStringFromRect($0.frame) } ?? "",
+         "rawHidden": hiddenItem?.button?.window.map { NSStringFromRect($0.frame) } ?? "",
+         "screens": NSScreen.screens.map { NSStringFromRect($0.frame) }]
+    }
+
     /// Re-sends the collapsed length with a 1 pt nudge so macOS lays the bar out again
     /// (used once when a display ended up drawing a collapsed divider).
     func nudgeCollapsed() {
@@ -181,7 +369,8 @@ final class StatusBarController: NSObject {
     func updateToggleIcon(expanded: Bool, badge: Icons.Badge?, tooltip: String) {
         guard let button = toggleItem?.button else { return }
         let image = Icons.toggle(style: settings.iconStyle, expanded: expanded, badge: badge)
-        if button.image !== image { button.image = image }
+        baseToggleImage = image
+        if Self.singleWindowBar { refreshToggleImage() } else if button.image !== image { button.image = image }
         if button.toolTip != tooltip { button.toolTip = tooltip }
     }
 
@@ -190,7 +379,11 @@ final class StatusBarController: NSObject {
     private func referenceScreen() -> NSScreen? {
         guard let f = toggleItem?.button?.window?.frame, f.width > 0 else { return nil }
         let p = NSPoint(x: f.maxX - 0.5, y: f.maxY - 0.5)
-        return NSScreen.screens.first { NSPointInRect(p, $0.frame) }
+        if let s = NSScreen.screens.first(where: { NSPointInRect(p, $0.frame) }) { return s }
+        // macOS 27 keeps our items' proxy windows outside the display vertically (the bar itself is
+        // MenuBarAgent's window); their x still follows the layout, so go by x alone.
+        guard Self.singleWindowBar else { return nil }
+        return NSScreen.screens.first { p.x >= $0.frame.minX && p.x <= $0.frame.maxX }
     }
 
     /// Our items' positions as distance-from-the-right-edge, encoded as rects whose x axis is
@@ -255,7 +448,11 @@ final class StatusBarController: NSObject {
             cleanSeparator = sep
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self, weak sep] in
                 guard let self, let sep, self.cleanSeparator === sep else { return }
-                self.setLength(sep, Self.collapsedLength)
+                // macOS 27 discards an item wider than half the display: stay just under it (icons
+                // beyond that width stay in the bar).
+                self.setLength(sep, Self.singleWindowBar
+                    ? SingleWindowBar.maxLength(narrowestWidth: self.narrowestScreenWidth(), padding: self.itemPadding)
+                    : Self.collapsedLength)
             }
         } else {
             if let s = cleanSeparator { NSStatusBar.system.removeStatusItem(s) }
@@ -269,6 +466,12 @@ final class StatusBarController: NSObject {
 
     @objc private func buttonClicked(_ sender: NSStatusBarButton) {
         guard let event = NSApp.currentEvent else { return }
+        // macOS 27: the blank part left of the icon only takes up room; it isn't the button.
+        if toggleExtra > 0, sender === toggleItem?.button, event.window === sender.window {
+            let x = sender.convert(event.locationInWindow, from: nil).x
+            let blank = sender.bounds.width - toggleNaturalWidth - 4
+            if blank > 8, x >= 0, x < blank { return }
+        }
         if event.type == .rightMouseUp || event.modifierFlags.contains(.control) {
             let item = [toggleItem, hiddenItem, alwaysItem].compactMap { $0 }.first { $0.button === sender } ?? toggleItem
             if let item { showMenu(from: item) }

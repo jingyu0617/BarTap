@@ -1,0 +1,25 @@
+name: Build
+
+on:
+  push:
+    branches: [main, "macos27-*"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain
+        run: |
+          sw_vers
+          swift --version
+      - name: Tests and universal build
+        run: SKIP_DMG=1 scripts/build.sh
+      - name: Package
+        run: ditto -c -k --keepParent dist/BarTap.app BarTap.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: BarTap
+          path: BarTap.zip

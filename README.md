@@ -94,6 +94,17 @@ BarTap hides the menu bar icons you don't need behind one divider, keeps CPU, GP
 
 Hiding and AI usage need no permission. Two optional ones: **Accessibility** enables the shelf, search and Settings › Layout (including Apply, which moves icons for you), and **Screen Recording** shows real icons there. Both stay granted when you update. Quit any other menu bar manager first.
 
+## macOS 27
+
+macOS 27 draws the whole menu bar as one window and throws away any menu bar item wider than half the display, so the very wide divider BarTap hides icons with on macOS 13–26 does nothing there. On macOS 27 BarTap instead fills exactly the room left of its divider: the divider grows, and on a wide display the BarTap button grows a blank part too, each staying under that limit. Icons left of the divider then have no room and are not drawn.
+
+- Hide and show work from the BarTap button, the hotkey and bartap:// commands. Accessibility lets BarTap read where the front app's menus end; without it BarTap assumes long menus and some icons may stay visible.
+- Settings › Layout can't move icons for you (there are no per-icon windows to drag). Hold ⌘ and drag icons left of the divider yourself.
+- Resting the pointer on the BarTap button to peek, the shelf's real icon images and Clean Menu Bar on a wide display are limited or unavailable.
+- With displays of different widths, the narrowest sets the limit, so a wide display may keep a few hidden icons visible.
+
+This support is new and was written without a macOS 27 Mac at hand: if hiding misbehaves, `bartap://debug/dump` (with `defaults write io.github.chenfangfc.BarTap debugCommands -bool true`) writes what BarTap measured under `singleWindowBar`.
+
 ## Why it can't twitch
 
 Organizers that move icons for you post synthetic ⌘-drags in the background, sometimes while freezing or warping the cursor. When macOS lags, those events land in the wrong place: the screen jumps and the mouse fights back.

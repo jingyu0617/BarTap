@@ -396,6 +396,7 @@ public enum ZhHans {
         "Plan ring": "套餐圆环",
         "Plan %": "套餐 %",
         "The menu bar isn't fully shown on any display right now, so its icons can't be moved. Try again in a moment.": "现在没有哪块屏幕完整显示菜单栏，图标没法移动。请稍后再试。",
+        "macOS 27 draws the menu bar as one window, so BarTap can't move icons for you there. Hold ⌘ and drag an icon left of BarTap's divider to hide it.": "macOS 27 把整条菜单栏画成一个窗口，BarTap 没法替你移动图标。请按住 ⌘，把图标拖到 BarTap 分隔线的左边来隐藏它。",
         "BarTap's divider isn't drawn on that display any more (a display changed?). Nothing else was moved.": "那块屏幕上已看不到 BarTap 的分隔线（屏幕有变化？）。其余图标没有再移动。",
         "always in the menu bar, right of the BarTap icon": "始终显示在菜单栏中，位于 BarTap 图标右侧",
         "shown when you click the BarTap icon": "点按 BarTap 图标时显示",

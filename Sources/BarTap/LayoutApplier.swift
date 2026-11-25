@@ -47,6 +47,12 @@ final class LayoutApplier {
         running = true
         cancelled = false
         log = []
+        if StatusBarController.singleWindowBar {
+            // Apply drags icons by their windows, and macOS 27 has none per icon.
+            log.append("macOS 27: no per-icon windows")
+            finish(Report(finish: .failed(L("macOS 27 draws the menu bar as one window, so BarTap can't move icons for you there. Hold ⌘ and drag an icon left of BarTap's divider to hide it."))), completion)
+            return
+        }
         start(request, tries: 0, progress: progress, completion: completion)
     }
 
