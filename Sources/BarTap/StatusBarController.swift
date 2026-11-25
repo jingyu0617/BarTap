@@ -288,10 +288,13 @@ final class StatusBarController: NSObject {
             screenMinX: screen.frame.minX, screenWidth: screen.frame.width, narrowestWidth: narrowest,
             toggleMaxX: t.maxX, toggleNaturalWidth: toggleNaturalWidth, between: lastBetween, padding: itemPadding,
             openLength: open, menuMaxX: menuEdge(on: screen))
-        guard let fit = SingleWindowBar.fit(measure, forcedWanted: forced) else {
+        guard var fit = SingleWindowBar.fit(measure, forcedWanted: forced) else {
             lastFit = "implausible frames (toggle maxX \(Int(t.maxX))): divider \(Int(fallback.dividerLength))"
             return fallback
         }
+        // Hidden setting: never widen the BarTap button (no gap beside it; on a display wider than
+        // twice the limit some hidden icons then stay in the bar).
+        if UserDefaults.standard.bool(forKey: "mb27.dividerOnly") { fit.toggleExtra = 0 }
         lastFit = "screen \(Int(screen.frame.minX))+\(Int(screen.frame.width)) toggleMaxX \(Int(t.maxX)) natural \(Int(toggleNaturalWidth))"
             + " between \(Int(lastBetween)) padding \(Int(itemPadding)) menuEdge \(measure.menuMaxX.map { "\(Int($0))" } ?? "?")"
             + " wanted \(Int(fit.wanted)) → divider \(Int(fit.dividerLength)) + button \(Int(fit.toggleExtra))"
@@ -466,12 +469,6 @@ final class StatusBarController: NSObject {
 
     @objc private func buttonClicked(_ sender: NSStatusBarButton) {
         guard let event = NSApp.currentEvent else { return }
-        // macOS 27: the blank part left of the icon only takes up room; it isn't the button.
-        if toggleExtra > 0, sender === toggleItem?.button, event.window === sender.window {
-            let x = sender.convert(event.locationInWindow, from: nil).x
-            let blank = sender.bounds.width - toggleNaturalWidth - 4
-            if blank > 8, x >= 0, x < blank { return }
-        }
         if event.type == .rightMouseUp || event.modifierFlags.contains(.control) {
             let item = [toggleItem, hiddenItem, alwaysItem].compactMap { $0 }.first { $0.button === sender } ?? toggleItem
             if let item { showMenu(from: item) }
@@ -488,9 +485,23 @@ final class StatusBarController: NSObject {
 
     func showMenu(from item: NSStatusItem? = nil) {
         guard let menu = menuProvider?(), let item = item ?? toggleItem else { return }
+        if Self.singleWindowBar, popUpBelowPointer(menu) { return }
         // Attaching the menu for a single click is the standard way to get native placement.
         item.menu = menu
         item.button?.performClick(nil)
         item.menu = nil
+    }
+
+    /// macOS 27: our buttons only stand in for what MenuBarAgent draws (their windows sit off the
+    /// display), so a menu attached to them doesn't reliably open. Open it right under the pointer
+    /// instead, when the pointer is in a menu bar (a click on our item); false otherwise.
+    private func popUpBelowPointer(_ menu: NSMenu) -> Bool {
+        let p = NSEvent.mouseLocation
+        guard let screen = NSScreen.screens.first(where: { NSPointInRect(p, $0.frame) }) else { return false }
+        let bar = max(screen.frame.maxY - screen.visibleFrame.maxY, NSStatusBar.system.thickness)
+        guard bar < 80, p.y >= screen.frame.maxY - bar - 2 else { return false }
+        // Returns once the menu closes, whether or not something was chosen.
+        menu.popUp(positioning: nil, at: NSPoint(x: p.x - 10, y: screen.frame.maxY - bar - 2), in: nil)
+        return true
     }
 }
