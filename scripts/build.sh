@@ -19,16 +19,21 @@ WORK=.build/package
 echo "==> Localization"
 python3 -I scripts/check_l10n.py
 
+# The compiler's output without terminal escapes: newer Swift wraps diagnostic group names in
+# hyperlinks, and a line picked out of the middle of one leaves the terminal swallowing everything
+# printed after it (the build looks stuck while it carries on).
+plain() { perl -pe 's/\e\][^\a\e]*(?:\a|\e\\)//g; s/\e\][^\a\e]*$//; s/\e\[[0-9;?]*[A-Za-z]//g' "$1"; }
+
 # Runs a build step, shows only diagnostics, and aborts the whole build if it fails.
 run_build() {
     local log
     log="$(mktemp)"
     if ! "$@" >"$log" 2>&1; then
-        grep -E "error|warning: " "$log" || tail -20 "$log"
+        plain "$log" | grep -E "error|warning: " || plain "$log" | tail -20
         rm -f "$log"
         echo "FAIL: $*"; exit 1
     fi
-    grep -E "warning: " "$log" || true
+    plain "$log" | grep -E "warning: " || true
     rm -f "$log"
 }
 
