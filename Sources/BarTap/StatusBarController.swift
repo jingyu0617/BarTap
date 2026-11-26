@@ -55,6 +55,9 @@ final class StatusBarController: NSObject {
     private var itemPadding: CGFloat = 10
     private var lastBetween: CGFloat = 0
     private var lastMenuEdge: CGFloat?
+    /// The divider's left edge (global x) last seen while it was open. Measured while collapsed,
+    /// our own frames include our own widths (and can lag the layout), which fed back into the sizing.
+    private var openDividerLeft: CGFloat?
     /// Blank width currently added on the left of the BarTap button.
     private(set) var toggleExtra: CGFloat = 0
     private var baseToggleImage: NSImage?
@@ -143,6 +146,7 @@ final class StatusBarController: NSObject {
         appliedLevel = nil
         toggleExtra = 0
         wideToggleImage = nil
+        openDividerLeft = nil
         refitWork?.cancel()
         refitWork = nil
     }
@@ -211,6 +215,9 @@ final class StatusBarController: NSObject {
     private func applySingleWindow(level: RevealLevel, open: CGFloat, followUp: Bool) {
         guard let hidden = hiddenItem else { return }
         rememberNaturalSizes()
+        if hidden.length <= open + 1, toggleExtra == 0, let h = hidden.button?.window?.frame, h.width > 0, h.width < 60 {
+            openDividerLeft = h.minX
+        }
         switch level {
         case .collapsed:
             let fit = hiddenFit(open: open)
@@ -287,7 +294,8 @@ final class StatusBarController: NSObject {
         let measure = SingleWindowBar.Measure(
             screenMinX: screen.frame.minX, screenWidth: screen.frame.width, narrowestWidth: narrowest,
             toggleMaxX: t.maxX, toggleNaturalWidth: toggleNaturalWidth, between: lastBetween, padding: itemPadding,
-            openLength: open, menuMaxX: menuEdge(on: screen))
+            openLength: open, menuMaxX: menuEdge(on: screen),
+            dividerLeft: openDividerLeft.flatMap { $0 > screen.frame.minX && $0 < t.maxX ? $0 : nil })
         guard var fit = SingleWindowBar.fit(measure, forcedWanted: forced) else {
             lastFit = "implausible frames (toggle maxX \(Int(t.maxX))): divider \(Int(fallback.dividerLength))"
             return fallback
@@ -296,7 +304,7 @@ final class StatusBarController: NSObject {
         // twice the limit some hidden icons then stay in the bar).
         if UserDefaults.standard.bool(forKey: "mb27.dividerOnly") { fit.toggleExtra = 0 }
         lastFit = "screen \(Int(screen.frame.minX))+\(Int(screen.frame.width)) toggleMaxX \(Int(t.maxX)) natural \(Int(toggleNaturalWidth))"
-            + " between \(Int(lastBetween)) padding \(Int(itemPadding)) menuEdge \(measure.menuMaxX.map { "\(Int($0))" } ?? "?")"
+            + " openDividerLeft \(openDividerLeft.map { "\(Int($0))" } ?? "?") between \(Int(lastBetween)) padding \(Int(itemPadding)) menuEdge \(measure.menuMaxX.map { "\(Int($0))" } ?? "?")"
             + " wanted \(Int(fit.wanted)) → divider \(Int(fit.dividerLength)) + button \(Int(fit.toggleExtra))"
         return fit
     }

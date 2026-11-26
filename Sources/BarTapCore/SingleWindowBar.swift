@@ -29,9 +29,13 @@ public enum SingleWindowBar {
         public var openLength: CGFloat
         /// Right edge of the front app's menus on that display; nil when unknown.
         public var menuMaxX: CGFloat?
+        /// The divider's left edge while icons are shown, if it was seen there; otherwise worked
+        /// out from the button.
+        public var dividerLeft: CGFloat?
 
         public init(screenMinX: CGFloat, screenWidth: CGFloat, narrowestWidth: CGFloat, toggleMaxX: CGFloat,
-                    toggleNaturalWidth: CGFloat, between: CGFloat, padding: CGFloat, openLength: CGFloat, menuMaxX: CGFloat?) {
+                    toggleNaturalWidth: CGFloat, between: CGFloat, padding: CGFloat, openLength: CGFloat, menuMaxX: CGFloat?,
+                    dividerLeft: CGFloat? = nil) {
             self.screenMinX = screenMinX
             self.screenWidth = screenWidth
             self.narrowestWidth = narrowestWidth
@@ -41,6 +45,7 @@ public enum SingleWindowBar {
             self.padding = padding
             self.openLength = openLength
             self.menuMaxX = menuMaxX
+            self.dividerLeft = dividerLeft
         }
     }
 
@@ -62,8 +67,9 @@ public enum SingleWindowBar {
     }
 
     /// Room deliberately left unfilled, so a menu a few points longer doesn't push BarTap's own
-    /// items out. Narrower than any icon, so nothing fits in it.
-    public static let margin: CGFloat = 8
+    /// items out, nor a stats item that grows by a digit. Narrower than any icon with its padding,
+    /// so nothing fits in it.
+    public static let margin: CGFloat = 16
     /// Without the menus' right edge, assume they take this share of the display: icons may stay
     /// visible, but BarTap's own items can never be pushed out.
     public static let unknownMenuShare: CGFloat = 0.3
@@ -87,7 +93,8 @@ public enum SingleWindowBar {
             menuEdge = m.screenMinX + m.screenWidth * unknownMenuShare
         }
         // Where the divider's left edge is while icons are shown.
-        let dividerLeft = m.toggleMaxX - m.toggleNaturalWidth - max(0, m.between) - (m.openLength + m.padding)
+        var dividerLeft = m.toggleMaxX - m.toggleNaturalWidth - max(0, m.between) - (m.openLength + m.padding)
+        if let x = m.dividerLeft, x > m.screenMinX, x < m.toggleMaxX { dividerLeft = x }
         let wanted = max(0, (forcedWanted ?? (dividerLeft - menuEdge - margin)).rounded(.down))
         let longest = maxLength(narrowestWidth: m.narrowestWidth, padding: m.padding)
         let dividerExtra = min(wanted, max(0, longest - m.openLength))

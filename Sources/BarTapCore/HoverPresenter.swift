@@ -212,6 +212,10 @@ public enum StatusItemHitTest {
 
     public static func hit(at p: CGPoint, screens: [ScreenInfo], windows: [WindowInfo], items: [Item]) -> Hit? {
         guard !items.isEmpty, let screen = screens.first(where: { !$0.asleep && $0.containsMenuBarPoint(p) }) else { return nil }
+        // macOS 27 draws the whole bar as one window: no status item has a window of its own.
+        if !windows.contains(where: { $0.layer == WindowLevel.status && $0.isOnScreen }) {
+            return proxyHit(at: p, on: screen, screens: screens, items: items)
+        }
         let row = MenuBarGeometry.row(on: screen, windows: windows)
         guard let w = row.first(where: { $0.isOnScreen && $0.bounds.minX <= p.x && p.x < $0.bounds.maxX }) else { return nil }
         func hit(_ id: String) -> Hit { Hit(id: id, frame: w.bounds, screenID: screen.id) }
@@ -238,6 +242,23 @@ public enum StatusItemHitTest {
             let frame = named.first { $0.0 == item }?.1.bounds ?? item.proxyFrame
             guard let f = frame, let s = display(of: f) else { continue }
             if abs(MenuBarGeometry.rightDistance(of: f, on: s) - rd) <= 2.5 && abs(f.width - w.bounds.width) <= 2.5 { return hit(item.id) }
+        }
+        return nil
+    }
+
+    /// By BarTap's own frames: their x follows the bar on the display that hosts them (their y can
+    /// be anywhere), and every display lays the same items out right-aligned.
+    static func proxyHit(at p: CGPoint, on screen: ScreenInfo, screens: [ScreenInfo], items: [Item]) -> Hit? {
+        let awake = screens.filter { !$0.asleep }
+        for item in items {
+            guard let f = item.proxyFrame, f.width > 0,
+                  let host = awake.first(where: { f.midX >= $0.frame.minX && f.midX <= $0.frame.maxX }) else { continue }
+            let maxX = screen.frame.maxX - (host.frame.maxX - f.maxX)
+            let minX = maxX - f.width
+            if p.x >= minX && p.x < maxX {
+                return Hit(id: item.id, frame: CGRect(x: minX, y: screen.frame.minY, width: f.width, height: screen.menuBarHeight),
+                           screenID: screen.id)
+            }
         }
         return nil
     }
